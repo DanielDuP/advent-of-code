@@ -15,23 +15,26 @@ pub fn main() !void {
     file_read: while (try reader.readUntilDelimiterOrEof(&buf, ')')) |line| {
         if (line.len < SHORTEST_POSSIBLE_MUL) continue :file_read;
         var cursor = line.len - 1;
-        var first_argument: []u8 = undefined;
-        var second_argument: []u8 = undefined;
+        var first_argument = std.ArrayList(u8).init(std.heap.page_allocator);
+        defer first_argument.deinit();
+        var second_argument = std.ArrayList(u8).init(std.heap.page_allocator);
+        defer second_argument.deinit();
+        var is_second_arg = false;
         while (cursor > 0) {
             const current_char = line[cursor];
             switch (current_char) {
                 '0'...'9' => {
-                    if (second_argument != null) {
-                        second_argument = [_]u8{current_char} ++ second_argument;
+                    if (is_second_arg) {
+                        try second_argument.insert(0, current_char);
                     } else {
-                        first_argument = [_]u8{current_char} ++ first_argument;
+                        try first_argument.insert(0, current_char);
                     }
                 },
                 ',' => {
-                    if (second_argument != null) {
+                    if (is_second_arg) {
                         continue :file_read;
                     }
-                    second_argument = [_]u8{};
+                    is_second_arg = true;
                 },
                 '(' => {
                     if (cursor < 3) {
@@ -40,10 +43,10 @@ pub fn main() !void {
                     if (!std.mem.eql(u8, line[cursor - 3 .. cursor], "mul")) {
                         continue :file_read;
                     }
-                    if (second_argument == null) {
+                    if (!is_second_arg) {
                         continue :file_read;
                     }
-                    total += try mul(first_argument, second_argument);
+                    total += try mul(first_argument.items, second_argument.items);
                     continue :file_read;
                 },
                 else => continue :file_read,
