@@ -10,16 +10,30 @@ pub fn main() !void {
     var buffered_reader = std.io.bufferedReader(file.reader());
     const reader = buffered_reader.reader();
 
-    var buf: [1024]u8 = undefined;
+    var buf: [4096]u8 = undefined;
     var total: i64 = 0;
-    while (try reader.readUntilDelimiterOrEof(&buf, ')')) |line| {
-        if (line.len < SHORTEST_POSSIBLE_MUL) continue;
-        total += (try processLine(line)) orelse 0;
+    var in_do_section = true;
+    while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
+        var parts = std.mem.split(u8, line, ")");
+        while (parts.next()) |part| {
+            if (part.len >= 3 and std.mem.eql(u8, part[part.len - 3 ..], "do(")) {
+                in_do_section = true;
+                continue;
+            }
+            if (part.len >= 6 and std.mem.eql(u8, part[part.len - 6 ..], "don't(")) {
+                in_do_section = false;
+                continue;
+            }
+            if (in_do_section) {
+                if (part.len < SHORTEST_POSSIBLE_MUL) continue;
+                total += (try processSection(part)) orelse 0;
+            }
+        }
     }
     std.debug.print("Total: {}\n", .{total});
 }
 
-fn processLine(line: []const u8) !?i64 {
+fn processSection(line: []const u8) !?i64 {
     var cursor = line.len - 1;
     var first_argument = std.ArrayList(u8).init(std.heap.page_allocator);
     defer first_argument.deinit();
