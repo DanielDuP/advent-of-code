@@ -21,28 +21,31 @@ pub fn main() !void {
     var buf: [4096]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
         const row = try std.heap.page_allocator.alloc(u8, line.len);
-        std.mem.copyForward(u8, row, line);
+        std.mem.copyForwards(u8, row, line);
         try grid.append(row);
     }
 
-    var total_count: usize = 0;
+    var xmas_sum: usize = 0;
+    var crossmas_sum: usize = 0;
     const rows = grid.items.len;
     const cols = grid.items[0].len;
 
     for (0..rows) |y| {
         for (0..cols) |x| {
             if (grid.items[y][x] == 'X') {
-                if (checkXMAS(&grid, x, y, rows, cols)) {
-                    total_count += 1;
-                }
+                xmas_sum += countXMAS(&grid, x, y);
+            }
+            if (grid.items[y][x] == 'A') {
+                crossmas_sum += hasCROSSMAS(&grid, x, y);
             }
         }
     }
 
-    std.debug.print("Total XMAS count: {}\n", .{total_count});
+    std.debug.print("Total XMAS sum: {}\n", .{xmas_sum});
+    std.debug.print("Total CROSSMAS sum: {}\n", .{crossmas_sum});
 }
 
-fn checkXMAS(grid: *const std.ArrayList([]u8), x: usize, y: usize, rows: usize, cols: usize) bool {
+fn countXMAS(grid: *const std.ArrayList([]u8), x: usize, y: usize) usize {
     const directions = [_][2]i32{
         [_]i32{ 1, 0 }, // right
         [_]i32{ 0, 1 }, // down
@@ -54,24 +57,60 @@ fn checkXMAS(grid: *const std.ArrayList([]u8), x: usize, y: usize, rows: usize, 
         [_]i32{ 1, -1 }, // diagonal up-right
     };
 
+    var count: usize = 0;
     for (directions) |dir| {
-        if (checkDirection(grid, x, y, dir[0], dir[1], rows, cols)) {
-            return true;
-        }
+        count += countXMASDirection(grid, x, y, dir[0], dir[1]);
     }
-    return false;
+    return count;
 }
 
-fn checkDirection(grid: *const std.ArrayList([]u8), x: usize, y: usize, dx: i32, dy: i32, rows: usize, cols: usize) bool {
+fn countXMASDirection(grid: *const std.ArrayList([]u8), x: usize, y: usize, dx: i32, dy: i32) usize {
+    const rows = grid.items.len;
+    const cols = grid.items[0].len;
     for (1..4) |i| {
         const nx = @as(i32, @intCast(x)) + dx * @as(i32, @intCast(i));
         const ny = @as(i32, @intCast(y)) + dy * @as(i32, @intCast(i));
-        if (nx < 0 or nx >= cols or ny < 0 or ny >= rows) {
-            return false;
+        if (nx < 0 or nx >= @as(i32, @intCast(cols)) or ny < 0 or ny >= @as(i32, @intCast(rows))) {
+            return 0;
         }
         if (grid.items[@intCast(ny)][@intCast(nx)] != TARGET_PHRASE[i]) {
-            return false;
+            return 0;
         }
     }
-    return true;
+    return 1;
+}
+
+fn hasCROSSMAS(grid: *const std.ArrayList([]u8), x: usize, y: usize) usize {
+    const directions = [_][2][2]i32{
+        [_][2]i32{ [_]i32{ -1, -1 }, [_]i32{ 1, 1 } },
+        [_][2]i32{ [_]i32{ -1, 1 }, [_]i32{ 1, -1 } },
+    };
+
+    for (directions) |dir_pair| {
+        if (!hasCROSSMASDirection(grid, x, y, dir_pair[0], dir_pair[1])) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+fn hasCROSSMASDirection(grid: *const std.ArrayList([]u8), x: usize, y: usize, dir1: [2]i32, dir2: [2]i32) bool {
+    const rows = grid.items.len;
+    const cols = grid.items[0].len;
+
+    const nx1 = @as(i32, @intCast(x)) + dir1[0];
+    const ny1 = @as(i32, @intCast(y)) + dir1[1];
+    const nx2 = @as(i32, @intCast(x)) + dir2[0];
+    const ny2 = @as(i32, @intCast(y)) + dir2[1];
+
+    if (nx1 < 0 or nx1 >= @as(i32, @intCast(cols)) or ny1 < 0 or ny1 >= @as(i32, @intCast(rows)) or
+        nx2 < 0 or nx2 >= @as(i32, @intCast(cols)) or ny2 < 0 or ny2 >= @as(i32, @intCast(rows)))
+    {
+        return false;
+    }
+
+    return (grid.items[@intCast(ny1)][@intCast(nx1)] == 'M' and
+        grid.items[@intCast(ny2)][@intCast(nx2)] == 'S') or
+        (grid.items[@intCast(ny1)][@intCast(nx1)] == 'S' and
+        grid.items[@intCast(ny2)][@intCast(nx2)] == 'M');
 }
