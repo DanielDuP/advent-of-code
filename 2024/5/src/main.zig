@@ -10,24 +10,35 @@ pub fn main() !void {
     var buffered_reader = std.io.bufferedReader(file.reader());
     const reader = buffered_reader.reader();
 
-    var ruleSet = std.ArrayList([2]NumberType).init(std.heap.page_allocator);
-    defer ruleSet.deinit();
-    var middleTermSum: NumberType = 0;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var rules = std.ArrayList([2]NumberType).init(allocator);
+    defer rules.deinit();
+    var validSequences = std.ArrayList([]const NumberType).init(allocator);
+    defer validSequences.deinit();
+    var invalidSequences = std.ArrayList([]const NumberType).init(allocator);
+    defer invalidSequences.deinit();
 
     var buf: [4096]u8 = undefined;
     while (try reader.readUntilDelimiterOrEof(&buf, '\n')) |line| {
         if (std.mem.indexOfScalar(u8, line, '|')) |_| {
-            const rule = try parseRuleSet(line);
-            try ruleSet.append(rule);
+            const rule = try parseRule(line);
+            try rules.append(rule);
         } else {
-            middleTermSum += try assessLine(line, ruleSet);
+            try processSequence(line, rules, &validSequences, &invalidSequences, allocator);
         }
     }
 
-    std.debug.print("Middle Term Sum: {}\n", .{middleTermSum});
+    const validSum = calculateMiddleTermSum(validSequences);
+    std.debug.print("Middle Term Sum of Valid Sequences: {}\n", .{validSum});
+
+    const correctedSum = try calculateCorrectedMiddleTermSum(invalidSequences, rules, allocator);
+    std.debug.print("Middle Term Sum of Corrected Sequences: {}\n", .{correctedSum});
 }
 
-fn parseRuleSet(input: []const u8) ![2]NumberType {
+fn parseRule(input: []const u8) ![2]NumberType {
     var iter = std.mem.splitScalar(u8, input, '|');
     const first = iter.next() orelse return error.InvalidInput;
     const second = iter.next() orelse return error.InvalidInput;
@@ -37,27 +48,51 @@ fn parseRuleSet(input: []const u8) ![2]NumberType {
     };
 }
 
-fn testRuleSet(input: []const NumberType, ruleSet: [2]NumberType) bool {
+fn isValidRule(sequence: []const NumberType, rule: [2]NumberType) bool {
     var first_index: ?usize = null;
     var second_index: ?usize = null;
 
-    for (input, 0..) |value, index| {
-        if (value == ruleSet[0] and first_index == null) {
+    for (sequence, 0..) |value, index| {
+        if (value == rule[0] and first_index == null) {
             first_index = index;
-        } else if (value == ruleSet[1] and second_index == null) {
+        } else if (value == rule[1] and second_index == null) {
             second_index = index;
         }
     }
 
-    if (first_index == null or second_index == null) {
-        return true;
-    }
-
-    return first_index.? < second_index.?;
+    return (first_index == null or second_index == null) or (first_index.? < second_index.?);
 }
 
-fn assessLine(input: []const u8, ruleSet: std.ArrayList([2]NumberType)) !NumberType {
-    var numbers = std.ArrayList(NumberType).init(std.heap.page_allocator);
+fn enforceRule(sequence: []const NumberType, rule: [2]NumberType, allocator: std.mem.Allocator) !?[]NumberType {
+    var result = try allocator.dupe(NumberType, sequence);
+    errdefer allocator.free(result);
+
+    var first_index: ?usize = null;
+    var second_index: ?usize = null;
+
+    for (sequence, 0..) |value, index| {
+        if (value == rule[0]) {
+            first_index = index;
+        } else if (value == rule[1]) {
+            second_index = index;
+        }
+
+        if (first_index != null and second_index != null) {
+            if (first_index.? > second_index.?) {
+                result[first_index.?] = sequence[second_index.?];
+                result[second_index.?] = sequence[first_index.?];
+                return result;
+            } else {
+                return null;
+            }
+        }
+    }
+
+    return null;
+}
+
+fn processSequence(input: []const u8, rules: std.ArrayList([2]NumberType), validSequences: *std.ArrayList([]const NumberType), invalidSequences: *std.ArrayList([]const NumberType), allocator: std.mem.Allocator) !void {
+    var numbers = std.ArrayList(NumberType).init(allocator);
     defer numbers.deinit();
 
     var it = std.mem.tokenize(u8, input, ",");
@@ -67,18 +102,45 @@ fn assessLine(input: []const u8, ruleSet: std.ArrayList([2]NumberType)) !NumberT
     }
 
     if (numbers.items.len == 0) {
-        return 0;
+        return;
     }
 
-    for (ruleSet.items) |rule| {
-        if (!testRuleSet(numbers.items, rule)) {
-            return 0;
-        }
-    }
+    const isValid = for (rules.items) |rule| {
+        if (!isValidRule(numbers.items, rule)) break false;
+    } else true;
 
-    return returnMiddleTerm(numbers.items);
+    if (isValid) {
+        try validSequences.append(try numbers.toOwnedSlice());
+    } else {
+        try invalidSequences.append(try numbers.toOwnedSlice());
+    }
 }
 
-fn returnMiddleTerm(input: []const NumberType) NumberType {
-    return input[input.len / 2];
+fn calculateMiddleTermSum(sequences: std.ArrayList([]const NumberType)) NumberType {
+    var sum: NumberType = 0;
+    for (sequences.items) |sequence| {
+        sum += sequence[sequence.len / 2];
+    }
+    return sum;
+}
+
+// this is really ugly, but hey, it worked first time I tried it, so I'm moving on
+fn calculateCorrectedMiddleTermSum(sequences: std.ArrayList([]const NumberType), rules: std.ArrayList([2]NumberType), allocator: std.mem.Allocator) !NumberType {
+    var sum: NumberType = 0;
+    for (sequences.items) |sequence| {
+        var correctedSequence = sequence;
+        var ruleApplied = true;
+        while (ruleApplied) {
+            ruleApplied = false;
+            for (rules.items) |rule| {
+                if (try enforceRule(correctedSequence, rule, allocator)) |newSequence| {
+                    correctedSequence = newSequence;
+                    ruleApplied = true;
+                    break;
+                }
+            }
+        }
+        sum += correctedSequence[correctedSequence.len / 2];
+    }
+    return sum;
 }
