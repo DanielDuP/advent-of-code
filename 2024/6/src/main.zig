@@ -58,6 +58,9 @@ pub const Map = struct {
         if (coordinates.x == self.guardLocation.x and coordinates.y == self.guardLocation.y) {
             return error.OccupiedSpace;
         }
+        if (self.get(coordinates) == Cell.Obstacle) {
+            return error.OccupiedSpace;
+        }
         self.set(coordinates, Cell.Obstacle);
     }
 
@@ -68,7 +71,7 @@ pub const Map = struct {
         self.set(coordinates, Cell.Empty);
     }
 
-    pub fn solve(self: *Map) !usize {
+    pub fn solveForDiscretePositions(self: *Map) !usize {
         var seen = std.AutoHashMap(struct { x: usize, y: usize }, void).init(self.allocator);
         defer seen.deinit();
         while (self.step()) |stepDetails| {
@@ -76,6 +79,38 @@ pub const Map = struct {
             try seen.put(.{ .x = coord.x, .y = coord.y }, {});
         }
         return seen.count();
+    }
+
+    pub fn testForLoop(self: *Map) !bool {
+        var seen = std.AutoHashMap(struct { CoordinatePair, Direction }, void).init(self.allocator);
+        defer seen.deinit();
+        while (self.step()) |stepDetails| {
+            const coord = stepDetails[0];
+            const direction = stepDetails[1];
+            const result = try seen.getOrPut(.{ coord, direction });
+            if (result.found_existing) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    pub fn solveForLoop(self: *Map) !i64 {
+        const currentGuardDirection = self.guardDirection;
+        const currentGuardLocation = self.guardLocation;
+        var count: i64 = 0;
+        for (0..self.numCols()) |x| {
+            for (0..self.numRows()) |y| {
+                const newObstacle = .{ .x = x, .y = y };
+                self.loadObstacle(newObstacle) catch continue;
+                if (try self.testForLoop()) {
+                    count += 1;
+                }
+                try self.clearObstacle(newObstacle);
+                try self.setGuard(currentGuardLocation, currentGuardDirection);
+            }
+        }
+        return count;
     }
 
     fn step(self: *Map) ?struct { CoordinatePair, Direction } {
@@ -199,6 +234,10 @@ pub fn main() !void {
     }
     try map.setGuard(guardLocation, guardDirection);
 
-    const steps = map.solve();
+    const steps = map.solveForDiscretePositions();
     std.debug.print("Number of discrete steps: {any}\n", .{steps});
+
+    try map.setGuard(guardLocation, guardDirection);
+    const loopCount = map.solveForLoop();
+    std.debug.print("Number of possible loops: {any}\n", .{loopCount});
 }
