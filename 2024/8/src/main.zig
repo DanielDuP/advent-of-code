@@ -42,26 +42,26 @@ pub fn main() !void {
         y += 1;
     }
 
+    var antiNodes = try calcAntiNodesForAllCoordinates(allocator, labeledCoords.items);
+    defer antiNodes.deinit();
+    constrainToMap(&antiNodes, max_x, y - 1);
+    std.debug.print("anti node count: {}\n", .{antiNodes.count()});
+
     var grid = try allocator.alloc([]u8, @intCast(y));
     for (0..@intCast(y)) |i| {
         grid[i] = try allocator.alloc(u8, @intCast(max_x + 1));
         @memset(grid[i], '.');
     }
 
-    for (labeledCoords.items) |labeled_coord| {
-        grid[@intCast(labeled_coord.coord.y)][@intCast(labeled_coord.coord.x)] = labeled_coord.label;
-    }
-
-    var antiNodes = try calcAntiNodesForAllCoordinates(allocator, labeledCoords.items);
-    defer antiNodes.deinit();
-    constrainToMap(&antiNodes, max_x, y - 1);
-    std.debug.print("anti node count: {}\n", .{antiNodes.count()});
-
     var antiNodesIterator = antiNodes.iterator();
 
     while (antiNodesIterator.next()) |labeled_coord| {
         const coord = labeled_coord.key_ptr.*;
         grid[@intCast(coord.y)][@intCast(coord.x)] = '#';
+    }
+
+    for (labeledCoords.items) |labeled_coord| {
+        grid[@intCast(labeled_coord.coord.y)][@intCast(labeled_coord.coord.x)] = labeled_coord.label;
     }
 
     for (grid) |row| {
