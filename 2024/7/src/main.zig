@@ -45,7 +45,7 @@ pub fn main() !void {
     std.debug.print("advanced count: {}\n", .{advancedCount});
 }
 
-test {
+test "testSequence" {
     const allocator = testing.allocator;
 
     const TestCase = struct {
@@ -64,7 +64,6 @@ test {
     const operators = [_]Operation{ .MULTIPLICATION, .ADDITION };
 
     for (testCases) |tc| {
-        std.debug.print("Testing case: terms={any}, target={}\n", .{ tc.terms, tc.target });
         const result = try testSequence(tc.terms, tc.target, &operators, allocator);
         try testing.expectEqual(tc.expected, result);
     }
@@ -72,13 +71,11 @@ test {
 
 const Operation = enum { MULTIPLICATION, ADDITION, CONCATENATION };
 
-const TermArray = []const u64;
-
-fn apply(terms: TermArray, operation: Operation, allocator: std.mem.Allocator) !TermArray {
+fn apply(terms: []const u64, operation: Operation) u64 {
     assert(terms.len >= 2);
     const term1 = terms[0];
     const term2 = terms[1];
-    const result: u64 = switch (operation) {
+    return switch (operation) {
         .MULTIPLICATION => term1 * term2,
         .ADDITION => term1 + term2,
         .CONCATENATION => blk: {
@@ -86,26 +83,21 @@ fn apply(terms: TermArray, operation: Operation, allocator: std.mem.Allocator) !
             break :blk (term1 * std.math.pow(u64, 10, shift)) + term2;
         },
     };
-
-    var new_terms = try ArrayList(u64).initCapacity(allocator, terms.len - 1);
-    errdefer new_terms.deinit();
-
-    try new_terms.append(result);
-    try new_terms.appendSlice(terms[2..]);
-
-    return new_terms.toOwnedSlice();
 }
 
-fn testSequence(terms: TermArray, target: u64, operators: []const Operation, allocator: std.mem.Allocator) !bool {
+fn testSequence(terms: []const u64, target: u64, operators: []const Operation, allocator: std.mem.Allocator) !bool {
     if (terms.len == 1) {
         return terms[0] == target;
     }
 
     for (operators) |op| {
-        const result = try apply(terms, op, allocator);
-        defer allocator.free(result);
+        var new_terms = try ArrayList(u64).initCapacity(allocator, terms.len - 1);
+        defer new_terms.deinit();
 
-        if (try testSequence(result, target, operators, allocator)) return true;
+        try new_terms.append(apply(terms, op));
+        try new_terms.appendSlice(terms[2..]);
+
+        if (try testSequence(new_terms.items, target, operators, allocator)) return true;
     }
 
     return false;
