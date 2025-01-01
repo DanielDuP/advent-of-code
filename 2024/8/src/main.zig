@@ -41,46 +41,46 @@ pub fn main() !void {
         max_x = @intCast(line.len - 1);
         y += 1;
     }
+    const max_y = y - 1;
 
-    var antiNodes = try calcAntiNodesForAllCoordinates(allocator, labeledCoords.items);
+    try processAntiNodes(allocator, labeledCoords.items, max_x, max_y, calcAntiNodePairForCoordinatePair, "Pair");
+    try processAntiNodes(allocator, labeledCoords.items, max_x, max_y, calcAntiNodeSetForCoordinatePair, "Set");
+}
+
+fn processAntiNodes(allocator: std.mem.Allocator, labeledCoords: []const LabeledCoords, max_x: i64, max_y: i64, antiNodeCalculator: fn (allocator: std.mem.Allocator, coords: [2]Coords, max_x: i64, max_y: i64) anyerror![]Coords, strategy: []const u8) !void {
+    var antiNodes = try calcAntiNodesForAllCoordinates(allocator, labeledCoords, max_x, max_y, antiNodeCalculator);
     defer antiNodes.deinit();
-    constrainToMap(&antiNodes, max_x, y - 1);
-    std.debug.print("anti node count: {}\n", .{antiNodes.count()});
+    std.debug.print("Anti node count ({s}): {}\n", .{ strategy, antiNodes.count() });
 
-    var grid = try allocator.alloc([]u8, @intCast(y));
-    for (0..@intCast(y)) |i| {
+    try renderGrid(allocator, antiNodes, labeledCoords, max_x, max_y);
+}
+
+fn renderGrid(allocator: std.mem.Allocator, antiNodes: std.AutoHashMap(Coords, void), labeledCoords: []const LabeledCoords, max_x: i64, max_y: i64) !void {
+    var grid = try allocator.alloc([]u8, @intCast(max_y + 1));
+    defer {
+        for (grid) |row| {
+            allocator.free(row);
+        }
+        allocator.free(grid);
+    }
+
+    for (0..@intCast(max_y + 1)) |i| {
         grid[i] = try allocator.alloc(u8, @intCast(max_x + 1));
         @memset(grid[i], '.');
     }
 
     var antiNodesIterator = antiNodes.iterator();
-
     while (antiNodesIterator.next()) |labeled_coord| {
         const coord = labeled_coord.key_ptr.*;
         grid[@intCast(coord.y)][@intCast(coord.x)] = '#';
     }
 
-    for (labeledCoords.items) |labeled_coord| {
+    for (labeledCoords) |labeled_coord| {
         grid[@intCast(labeled_coord.coord.y)][@intCast(labeled_coord.coord.x)] = labeled_coord.label;
     }
 
     for (grid) |row| {
         std.debug.print("{s}\n", .{row});
-    }
-
-    for (grid) |row| {
-        allocator.free(row);
-    }
-    allocator.free(grid);
-}
-
-fn constrainToMap(map: *std.AutoHashMap(Coords, void), max_x: i64, max_y: i64) void {
-    var it = map.iterator();
-    while (it.next()) |entry| {
-        const coord = entry.key_ptr.*;
-        if (coord.x < 0 or coord.x > max_x or coord.y < 0 or coord.y > max_y) {
-            _ = map.remove(coord);
-        }
     }
 }
 
@@ -98,7 +98,7 @@ fn createLabelMap(allocator: std.mem.Allocator, labeledCoords: []const LabeledCo
     return labelMap;
 }
 
-fn calcAntiNodesForAllCoordinates(allocator: std.mem.Allocator, labeledCoords: []const LabeledCoords) !std.AutoHashMap(Coords, void) {
+fn calcAntiNodesForAllCoordinates(allocator: std.mem.Allocator, labeledCoords: []const LabeledCoords, max_x: i64, max_y: i64, antiNodeCalculator: fn (allocator: std.mem.Allocator, coords: [2]Coords, max_x: i64, max_y: i64) anyerror![]Coords) !std.AutoHashMap(Coords, void) {
     var coordinateHashMap = std.AutoHashMap(Coords, void).init(allocator);
     var labelMap = try createLabelMap(allocator, labeledCoords);
     defer {
@@ -112,7 +112,7 @@ fn calcAntiNodesForAllCoordinates(allocator: std.mem.Allocator, labeledCoords: [
     var labelIterator = labelMap.iterator();
     while (labelIterator.next()) |entry| {
         const coordinates = entry.value_ptr.*;
-        const coords = try calcAntiNodesForCoordinateSet(allocator, coordinates.items);
+        const coords = try calcAntiNodesForCoordinateSet(allocator, coordinates.items, max_x, max_y, antiNodeCalculator);
         defer allocator.free(coords);
 
         for (coords) |coord| {
@@ -123,21 +123,63 @@ fn calcAntiNodesForAllCoordinates(allocator: std.mem.Allocator, labeledCoords: [
     return coordinateHashMap;
 }
 
-fn calcAntiNodesForCoordinatePair(coords: [2]Coords) [2]Coords {
-    return .{
-        .{ .x = 2 * coords[0].x - coords[1].x, .y = 2 * coords[0].y - coords[1].y },
-        .{ .x = 2 * coords[1].x - coords[0].x, .y = 2 * coords[1].y - coords[0].y },
-    };
+fn calcAntiNodePairForCoordinatePair(allocator: std.mem.Allocator, coords: [2]Coords, max_x: i64, max_y: i64) ![]Coords {
+    var result = std.ArrayList(Coords).init(allocator);
+    errdefer result.deinit();
+
+    for (coords, 0..) |coord, i| {
+        const other = coords[1 - i];
+        const anti = Coords{
+            .x = 2 * coord.x - other.x,
+            .y = 2 * coord.y - other.y,
+        };
+        if (anti.x >= 0 and anti.x <= max_x and anti.y >= 0 and anti.y <= max_y) {
+            try result.append(anti);
+        }
+    }
+
+    return result.toOwnedSlice();
 }
 
-fn calcAntiNodesForCoordinateSet(allocator: std.mem.Allocator, coords: []const Coords) ![]Coords {
+fn calcAntiNodeSetForCoordinatePair(allocator: std.mem.Allocator, coords: [2]Coords, max_x: i64, max_y: i64) ![]Coords {
+    var result = std.ArrayList(Coords).init(allocator);
+    errdefer result.deinit();
+
+    const dx = coords[0].x - coords[1].x;
+    const dy = coords[0].y - coords[1].y;
+
+    const movementPatterns = [_][2]i64{ .{ dx, dy }, .{ -dx, -dy } };
+
+    outer: for (movementPatterns) |pattern| {
+        var current_x = coords[0].x;
+        var current_y = coords[0].y;
+
+        while (true) {
+            current_x += pattern[0];
+            current_y += pattern[1];
+
+            if (current_x < 0 or current_x > max_x or current_y < 0 or current_y > max_y) {
+                continue :outer;
+            }
+
+            try result.append(.{ .x = current_x, .y = current_y });
+        }
+    }
+
+    try result.appendSlice(&coords);
+
+    return result.toOwnedSlice();
+}
+
+fn calcAntiNodesForCoordinateSet(allocator: std.mem.Allocator, coords: []const Coords, max_x: i64, max_y: i64, antiNodeCalculator: fn (allocator: std.mem.Allocator, coords: [2]Coords, max_x: i64, max_y: i64) anyerror![]Coords) ![]Coords {
     var result = std.ArrayList(Coords).init(allocator);
     errdefer result.deinit();
 
     for (coords, 0..) |firstCoordinate, i| {
         for (coords[i + 1 ..]) |secondCoordinate| {
-            const antiNodes = calcAntiNodesForCoordinatePair(.{ firstCoordinate, secondCoordinate });
-            try result.appendSlice(&antiNodes);
+            const antiNodes = try antiNodeCalculator(allocator, .{ firstCoordinate, secondCoordinate }, max_x, max_y);
+            defer allocator.free(antiNodes);
+            try result.appendSlice(antiNodes);
         }
     }
 
