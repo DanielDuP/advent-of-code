@@ -24,7 +24,7 @@ pub fn main() !void {
                 try diskMapDescription.append(@as(i32, char - '0'));
             }
         }
-        try evaluateDiskMap(allocator, diskMapDescription);
+        try evaluateDiskMap(allocator, diskMapDescription, compactDiskMapWithoutFragmentation);
     }
 }
 
@@ -36,10 +36,10 @@ const FileBlock = union(enum) {
 const DiskMap = std.ArrayList(FileBlock);
 const DiskMapDescription = std.ArrayList(i32);
 
-fn evaluateDiskMap(allocator: std.mem.Allocator, diskMapDescription: DiskMapDescription) !void {
+fn evaluateDiskMap(allocator: std.mem.Allocator, diskMapDescription: DiskMapDescription, compactionStrategy: *const fn (*DiskMap) anyerror!void) !void {
     var diskMap = try composeDiskMap(allocator, diskMapDescription);
     defer diskMap.deinit();
-    compactDiskMap(&diskMap);
+    try compactionStrategy(&diskMap);
     const cs = try checkSum(diskMap);
     std.debug.print("Checksum: {}\n", .{cs});
 }
@@ -59,7 +59,7 @@ fn composeDiskMap(allocator: std.mem.Allocator, diskMapDescription: DiskMapDescr
     return diskMap;
 }
 
-fn compactDiskMap(diskMap: *DiskMap) void {
+fn compactDiskMapWithFragmentation(diskMap: *DiskMap) !void {
     var j: usize = diskMap.items.len - 1;
     var i: usize = 0;
     while (i < j) {
@@ -73,6 +73,88 @@ fn compactDiskMap(diskMap: *DiskMap) void {
             }
         }
         i += 1;
+    }
+}
+
+const MemorySlot = struct {
+    beginning: usize,
+    end: usize,
+
+    fn length(self: MemorySlot) usize {
+        return self.end - self.beginning + 1;
+    }
+};
+
+fn findOpenMemorySlots(diskMap: *DiskMap, allocator: std.mem.Allocator) !std.ArrayList(MemorySlot) {
+    var openMemorySlots = std.ArrayList(MemorySlot).init(allocator);
+    errdefer openMemorySlots.deinit();
+
+    var j: usize = 0;
+    while (j < diskMap.items.len) {
+        switch (diskMap.items[j]) {
+            .Data => j += 1,
+            .Empty => {
+                var i = j + 1;
+                while (i < diskMap.items.len and diskMap.items[i] == .Empty) {
+                    i += 1;
+                }
+                try openMemorySlots.append(MemorySlot{ .beginning = j, .end = i - 1 });
+                j = i;
+            },
+        }
+    }
+
+    return openMemorySlots;
+}
+
+fn compactDiskMapWithoutFragmentation(diskMap: *DiskMap) !void {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var openMemorySlots = try findOpenMemorySlots(diskMap, allocator);
+    defer openMemorySlots.deinit();
+
+    var i: usize = diskMap.items.len;
+    while (i > 0) {
+        i -= 1;
+        switch (diskMap.items[i]) {
+            .Empty => {},
+            .Data => |value| {
+                var j: usize = i;
+                while (j > 0 and diskMap.items[j - 1] == .Data and diskMap.items[j - 1].Data == value) {
+                    j -= 1;
+                }
+                const requiredLength = i - j + 1;
+                slot_search: for (openMemorySlots.items, 0..) |slot, slot_index| {
+                    if (slot.length() >= requiredLength and slot.beginning < j) {
+                        moveBlock(diskMap, j, i, slot.beginning);
+                        if (slot.length() > requiredLength) {
+                            openMemorySlots.items[slot_index] = MemorySlot{
+                                .beginning = slot.beginning + requiredLength,
+                                .end = slot.end,
+                            };
+                        } else {
+                            _ = openMemorySlots.orderedRemove(slot_index);
+                        }
+                        break :slot_search;
+                    }
+                }
+                i = j;
+            },
+        }
+    }
+}
+
+fn moveBlock(diskMap: *DiskMap, copyFromStart: usize, copyFromEnd: usize, copyToStart: usize) void {
+    assert(diskMap.items.len > copyFromEnd);
+    assert(copyToStart + (copyFromEnd - copyFromStart) < diskMap.items.len);
+
+    const blockSize = copyFromEnd - copyFromStart + 1;
+    var i: usize = 0;
+    while (i < blockSize) : (i += 1) {
+        diskMap.items[copyToStart + i] = diskMap.items[copyFromStart + i];
+        diskMap.items[copyFromStart + i] = FileBlock.Empty;
     }
 }
 
