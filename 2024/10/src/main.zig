@@ -28,8 +28,10 @@ pub fn main() !void {
         }
         y += 1;
     }
-    const mapScore = try scoreMap(&map);
-    std.debug.print("Map score: {d}\n", .{mapScore});
+    const mapScoreByPeaks = try scoreMap(&map, scoreTrailByPeaks);
+    const mapScoreByRoutes = try scoreMap(&map, scoreTrailByRoutes);
+    std.debug.print("Map score by peaks: {d}\n", .{mapScoreByPeaks});
+    std.debug.print("Map score by routes: {d}\n", .{mapScoreByRoutes});
 }
 
 fn loadValue(map: *Map, coord: Coord, value: u4) void {
@@ -58,12 +60,8 @@ const directions = [_][2]i16{
     .{ 0, 1 },
 };
 
-fn scoreMap(map: *const Map) !u32 {
+fn scoreMap(map: *const Map, scoringStrategy: fn (*const Map, Coord) anyerror!u32) !u32 {
     var score: u32 = 0;
-    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
     for (map, 0..) |row, y| {
         if (row[0] == null) {
             break;
@@ -76,22 +74,47 @@ fn scoreMap(map: *const Map) !u32 {
                 continue;
             }
             const trailOrigin = Coord{ .x = @as(i16, @intCast(x)), .y = @as(i16, @intCast(y)) };
-            var highest_points = std.AutoHashMap(Coord, void).init(allocator);
-            scoreCoordinate(map, trailOrigin, &highest_points);
-            score += @as(u32, @intCast(highest_points.count()));
+            score += try scoringStrategy(map, trailOrigin);
         }
     }
     return score;
 }
 
-fn scoreCoordinate(map: *const Map, coord: Coord, highest_points: *std.AutoHashMap(Coord, void)) void {
+fn scoreTrailByPeaks(map: *const Map, trailOrigin: Coord) !u32 {
+    var score: u32 = 0;
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    var distinctHighestPoints = std.AutoHashMap(Coord, void).init(allocator);
+    const listOfHighestPoints = try scoreCoordinate(map, trailOrigin, allocator);
+    defer listOfHighestPoints.deinit();
+
+    for (listOfHighestPoints.items) |coord| {
+        try distinctHighestPoints.put(coord, {});
+    }
+
+    score = @intCast(distinctHighestPoints.count());
+    return score;
+}
+
+fn scoreTrailByRoutes(map: *const Map, trailOrigin: Coord) !u32 {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+    const listOfHighestPoints = try scoreCoordinate(map, trailOrigin, allocator);
+    defer listOfHighestPoints.deinit();
+    return @intCast(listOfHighestPoints.items.len);
+}
+
+fn scoreCoordinate(map: *const Map, coord: Coord, allocator: std.mem.Allocator) !ArrayList(Coord) {
+    var highest_points = ArrayList(Coord).init(allocator);
     const currentVal = getValue(map, coord);
     if (currentVal == null) {
-        return;
+        return highest_points;
     }
     if (currentVal.? == MAX_HEIGHT) {
-        highest_points.put(coord, {}) catch unreachable;
-        return;
+        try highest_points.append(coord);
+        return highest_points;
     }
     for (directions) |direction| {
         const newCoordinate = Coord{ .x = coord.x + direction[0], .y = coord.y + direction[1] };
@@ -99,6 +122,9 @@ fn scoreCoordinate(map: *const Map, coord: Coord, highest_points: *std.AutoHashM
         if (newValue == null or newValue.? != currentVal.? + 1) {
             continue;
         }
-        scoreCoordinate(map, newCoordinate, highest_points);
+        var subPoints = try scoreCoordinate(map, newCoordinate, allocator);
+        try highest_points.appendSlice(subPoints.items);
+        subPoints.deinit();
     }
+    return highest_points;
 }
